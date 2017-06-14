@@ -4,7 +4,7 @@
 from __future__ import print_function, division
 from caffe import layers as L
 from caffe import params as P
-
+from caffe.coord_map import crop
 
 __author__ = 'Fisher Yu'
 __copyright__ = 'Copyright (c) 2016, Fisher Yu'
@@ -70,10 +70,13 @@ def make_upsample(bottom, num_classes):
             group=num_classes, pad=4, weight_filler=dict(type="bilinear")))
 
 
-def build_frontend_vgg(net, bottom, num_classes):
+def build_frontend_vgg(net, bottom, num_classes, dilated=True):
     prev_layer = bottom
     num_convolutions = [2, 2, 3, 3, 3]
-    dilations = [0, 0, 0, 0, 2, 4]
+    if dilated:
+        dilations = [0, 0, 0, 0, 2, 4]
+    else:
+        dilations = [0, 0, 0, 0, 0, 0]
     for l in range(5):
         num_outputs = min(64 * 2 ** l, 512)
         for i in range(0, num_convolutions[l]):
@@ -118,13 +121,40 @@ def build_frontend_vgg(net, bottom, num_classes):
         convolution_param=dict(num_output=4096, kernel_size=1))
     net.relu7 = L.ReLU(net.fc7, in_place=True)
     net.drop7 = L.Dropout(net.relu7, in_place=True, dropout_ratio=0.5)
-    net.final = L.Convolution(
+    if dilated:
+        net.final = L.Convolution(
         net.drop7,
         param=[dict(lr_mult=1, decay_mult=1), dict(lr_mult=2, decay_mult=0)],
         convolution_param=dict(
             num_output=num_classes, kernel_size=1,
             weight_filler=dict(type='gaussian', std=0.001),
             bias_filler=dict(type='constant', value=0)))
+    else:
+        net.score_fr = L.Convolution(net.drop7, num_output=num_classes, kernel_size=1, pad=0,
+            param=[dict(lr_mult=1, decay_mult=1), dict(lr_mult=2, decay_mult=0)])
+        
+        net.upscore2 = L.Deconvolution(net.score_fr, convolution_param=dict(num_output=num_classes, kernel_size=4, stride=2, bias_term=False),
+            param=[dict(lr_mult=0)])
+
+        net.score_pool4 = L.Convolution(getattr(net, 'pool4'), num_output=num_classes, kernel_size=1, pad=0,
+             param=[dict(lr_mult=1, decay_mult=1), dict(lr_mult=2, decay_mult=0)])
+    
+        net.score_pool4c = crop(net.score_pool4, net.upscore2)
+        net.fuse_pool4 = L.Eltwise(net.upscore2, net.score_pool4c, operation=P.Eltwise.SUM)
+        net.upscore_pool4 = L.Deconvolution(net.fuse_pool4,
+            convolution_param=dict(num_output=num_classes, kernel_size=4, stride=2,
+            bias_term=False),
+            param=[dict(lr_mult=0)])
+
+        net.score_pool3 = L.Convolution(getattr(net,'pool3'), num_output=num_classes, kernel_size=1, pad=0,
+            param=[dict(lr_mult=1, decay_mult=1), dict(lr_mult=2, decay_mult=0)])
+        net.score_pool3c = crop(net.score_pool3, net.upscore_pool4)
+        net.fuse_pool3 = L.Eltwise(net.upscore_pool4, net.score_pool3c, operation=P.Eltwise.SUM)
+        net.upscore8 = L.Deconvolution(net.fuse_pool3,
+            convolution_param=dict(num_output=num_classes, kernel_size=16, stride=8,
+            bias_term=False),
+            param=[dict(lr_mult=0)])
+        net.final = crop(net.upscore8, bottom)
     return net.final, 'final'
 
 

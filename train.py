@@ -54,7 +54,7 @@ def make_frontend_vgg(options, is_training):
         image_path, label_path, batch_size,
         is_training, options.crop_size, options.mean)
     last = network.build_frontend_vgg(
-        net, net.data, options.classes)[0]
+        net, net.data, options.classes, options.dilation)[0]
     if options.up:
         net.upsample = network.make_upsample(last, options.classes)
         last = net.upsample
@@ -92,7 +92,7 @@ def make_joint(options, is_training):
         image_path, label_path, batch_size,
         is_training, options.crop_size, options.mean)
     last = network.build_frontend_vgg(
-        net, net.data, options.classes)[0]
+        net, net.data, options.classes, options.dilation)[0]
     last = network.build_context(
         net, last, options.classes, options.layers)[0]
     if options.up:
@@ -202,6 +202,9 @@ def main():
                              'training snapshots.')
     parser.add_argument('--train_image', default='', required=True,
                         help='Path to the training image list')
+    parser.add_argument('--dilation', action='store_true',
+                        help='If true, will train a dilation FCN,
+                        otherwise a regular FCN-8')
     parser.add_argument('--train_label', default='', required=True,
                         help='Path to the training label list')
     parser.add_argument('--test_image', default='',
